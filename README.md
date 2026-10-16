@@ -7,6 +7,8 @@ Plain-language browser for Indian central laws, with a CORS-proof proxy.
 - `index.html` — the app (search box, result cards, disclaimer)
 - `worker.js` — Cloudflare Worker that serves the page **and** proxies `/api/search` to IndiaCode server-side, so the browser never hits CORS
 - `wrangler.toml` — deploy config
+- `build.py` — syncs `index.html` into `worker.js` before every deploy
+- `package.json` — npm scripts: `build` and `deploy`
 
 ## Why the proxy
 
@@ -17,10 +19,16 @@ IndiaCode's API sends no `Access-Control-Allow-Origin` header. A plain `fetch()`
 ```bash
 npm i -g wrangler
 wrangler login
-wrangler deploy
+npm run deploy
 ```
 
-That gives you `https://nyayasetu.<your-subdomain>.workers.dev` — page and API on one origin, zero cost, no card.
+`npm run deploy` rebuilds `worker.js` from the latest `index.html`, then runs `wrangler deploy`. You get `https://nyayasetu.<subdomain>.workers.dev` — page and API on one origin, zero cost, no card.
+
+## Edit workflow
+
+1. Change `index.html` (search UI, cards, copy, styles)
+2. Run `python3 build.py` (or just `npm run deploy`)
+3. Commit and push
 
 ## Run locally without Cloudflare
 
@@ -28,7 +36,7 @@ That gives you `https://nyayasetu.<your-subdomain>.workers.dev` — page and API
 python -m http.server 8000
 ```
 
-Direct mode will fail on search due to CORS — that's expected. The Worker is what makes search work in production.
+Direct mode will fail on search due to CORS — expected. The Worker is what makes search work in production.
 
 ## Data source
 
