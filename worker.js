@@ -1,0 +1,149 @@
+// NyayaSetu proxy worker
+// Serves index.html and forwards /api/search?q=... to IndiaCode (avoids browser CORS).
+// Deploy free at workers.dev: wrangler deploy, or paste into the Cloudflare dashboard.
+
+const INDEX = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NyayaSetu — Indian Legal Information</title>
+<meta name="description" content="Plain-language access to Indian central laws. Search acts, read summaries, open official texts, and find a lawyer.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='12' fill='%231b2e24'/%3E%3Cpath d='M18 46V20h10c4.5 0 7.5 2.2 7.5 6 0 2.6-1.5 4.6-4 5.4L36 46h-5.6l-4-12.2H23.6V46H18zm5.6-17h4.2c2.4 0 3.8-1.1 3.8-2.9s-1.4-2.9-3.8-2.9h-4.2v5.8zM42 20h5.4l3.2 8.4 3.2-8.4H59l-5.6 13.4H48.6L43 20z' fill='%23e8d5a3'/%3E%3C/svg%3E">
+<style>
+  :root{
+    --ink:#1b2e24; --paper:#f6f1e7; --moss:#2f5d4a; --brass:#b08d3e; --rust:#a33b2b; --muted:#6b7268;
+  }
+  *{margin:0;padding:0;box-sizing:border-box}
+  body{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--paper);color:var(--ink);min-height:100vh}
+  header{background:var(--ink);color:var(--paper);padding:1.4rem 1.5rem;display:flex;align-items:center;gap:.8rem}
+  header .mark{width:2rem;height:2rem}
+  header h1{font-size:1.25rem;font-weight:600;letter-spacing:.02em}
+  header span{font-size:.8rem;color:#c9c2a8;margin-left:auto}
+  main{max-width:920px;margin:0 auto;padding:1.5rem}
+  .searchbox{display:flex;gap:.6rem;margin-bottom:1.2rem}
+  .searchbox input{flex:1;padding:.85rem 1rem;border:1.5px solid #d7d0c0;border-radius:10px;font-size:1rem;background:#fff;outline:none}
+  .searchbox input:focus{border-color:var(--moss)}
+  .searchbox button{padding:.85rem 1.4rem;border:none;border-radius:10px;background:var(--moss);color:#fff;font-size:1rem;cursor:pointer}
+  .searchbox button:disabled{opacity:.5;cursor:wait}
+  .hint{font-size:.85rem;color:var(--muted);margin-bottom:1rem}
+  .results{display:grid;gap:.9rem}
+  .card{background:#fff;border:1px solid #e4ddcc;border-radius:12px;padding:1rem 1.1rem;display:flex;flex-direction:column;gap:.45rem;transition:box-shadow .15s}
+  .card:hover{box-shadow:0 4px 14px rgba(27,46,36,.08)}
+  .card h2{font-size:1.05rem;color:var(--moss)}
+  .card .meta{font-size:.78rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.6rem}
+  .card .desc{font-size:.92rem;line-height:1.45;color:#333}
+  .card a.official{align-self:flex-start;text-decoration:none;color:var(--brass);font-size:.85rem;font-weight:600}
+  .card a.official:hover{text-decoration:underline}
+  .empty{color:var(--muted);padding:2rem 0;text-align:center}
+  .err{background:#fdecea;color:var(--rust);border:1px solid #f3c6bf;border-radius:10px;padding:.8rem 1rem;font-size:.9rem;margin-bottom:1rem}
+  footer{max-width:920px;margin:0 auto;padding:1rem 1.5rem 2rem;font-size:.78rem;color:var(--muted);line-height:1.5}
+  footer b{color:var(--ink)}
+  @media (max-width:600px){header span{display:none}}
+</style>
+</head>
+<body>
+<header>
+  <svg class="mark" viewBox="0 0 64 64" aria-hidden="true"><rect width="64" height="64" rx="12" fill="#e8d5a3"/><path d="M18 46V20h10c4.5 0 7.5 2.2 7.5 6 0 2.6-1.5 4.6-4 5.4L36 46h-5.6l-4-12.2H23.6V46H18zm5.6-17h4.2c2.4 0 3.8-1.1 3.8-2.9s-1.4-2.9-3.8-2.9h-4.2v5.8zM42 20h5.4l3.2 8.4 3.2-8.4H59l-5.6 13.4H48.6L43 20z" fill="#1b2e24"/></svg>
+  <h1>NyayaSetu</h1>
+  <span>Indian central laws, plainly</span>
+</header>
+<main>
+  <form class="searchbox" id="form">
+    <input id="q" type="search" placeholder="Search acts — e.g. contract, property, labour, IPC" autocomplete="off">
+    <button type="submit" id="btn">Search</button>
+  </form>
+  <p class="hint">Results come from the official IndiaCode database (indiacode.ecourtsindia.com). This is general information, not legal advice.</p>
+  <div id="err" class="err" hidden></div>
+  <div id="results" class="results"></div>
+</main>
+<footer>
+  <b>Disclaimer:</b> This site summarises publicly available central legislation for general awareness only.
+  It is not legal advice and may not reflect the latest amendments. For anything affecting your rights or obligations, consult a licensed advocate.
+  Official texts: <a href="https://indiacode.ecourtsindia.com" target="_blank" rel="noreferrer">indiacode.ecourtsindia.com</a>.
+</footer>
+<script>
+const API = '/api/search';
+const form = document.getElementById('form);
+const input = document.getElementById('q);
+const btn = document.getElementById('btn);
+const results = document.getElementById('results);
+const errBox = document.getElementById('err);
+
+function showErr(msg){ errBox.hidden = false; errBox.textContent = msg; }
+function clearErr(){ errBox.hidden = true; errBox.textContent = ''; }
+
+function card(act){
+  const el = document.createElement('article);
+  el.className = 'card';
+  const title = act.title || act.name || act.act_title || 'Untitled';
+  const year = act.year || act.enactment_year || '';
+  const num = act.number || act.act_number || '';
+  const desc = act.description || act.short_description || act.summary || '';
+  const url = act.url || act.link || act.official_url || '#';
+  el.innerHTML = `
+    <h2>${escapeHtml(title)}</h2>
+    <div class="meta">${year ? 'Year '+escapeHtml(String(year)) : ''}${num ? ' · Act No. '+escapeHtml(String(num)) : ''}</div>
+    ${desc ? '<div class="desc">'+escapeHtml(String(desc))+'</div>' : ''}
+    ${url && url !== '#' ? '<a class="official" href="'+url+'" target="_blank" rel="noreferrer">Open official text ↗</a>' : ''}
+  `;
+  return el;
+}
+function escapeHtml(s){ return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+form.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const q = input.value.trim();
+  if (!q) return;
+  clearErr();
+  results.innerHTML = '';
+  btn.disabled = true; btn.textContent = 'Searching…';
+  try {
+    const res = await fetch(API + '?q=' + encodeURIComponent(q), { headers: { 'Accept': 'application/json' } });
+    if (!res.ok) throw new Error('IndiaCode returned ' + res.status);
+    const data = await res.json();
+    const items = Array.isArray(data) ? data : (data.results || data.data || data.acts || []);
+    if (!items.length) {
+      results.innerHTML = '<div class="empty">No acts matched "'+escapeHtml(q)+'". Try a broader term like "labour" or "property".</div>';
+    } else {
+      items.slice(0, 30).forEach(a => results.appendChild(card(a)));
+    }
+  } catch (ex) {
+    showErr('Could not reach IndiaCode (' + ex.message + '). The API may be temporarily down — try again shortly.');
+  } finally {
+    btn.disabled = false; btn.textContent = 'Search';
+  }
+});
+
+results.innerHTML = '<div class="empty">Type a topic above to search central acts.</div>';
+</script>
+</body>
+</html>`;
+
+const UPSTREAM = 'https://indiacode.ecourtsindia.com/api/search';
+
+export default {
+  async fetch(request) {
+    const url = new URL(request.url);
+
+    if (url.pathname === '/api/search') {
+      const q = url.searchParams.get('q') || '';
+      const upstream = await fetch(UPSTREAM + '?q=' + encodeURIComponent(q), {
+        headers: { 'Accept': 'application/json', 'User-Agent': 'NyayaSetu/1.0' }
+      });
+    const body = await upstream.text();
+      return new Response(body, {
+        status: upstream.status,
+        headers: {
+          'Content-Type': upstream.headers.get('Content-Type') || 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Cache-Control': 'public, max-age=300'
+        }
+      });
+    }
+
+    return new Response(INDEX, {
+      headers: { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'public, max-age=3600' }
+    });
+  }
+};

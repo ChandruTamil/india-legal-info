@@ -1,0 +1,6 @@
+name = "nyayasetu"
+main = "worker.js"
+compatibility_date = "2026-10-16"
+
+[vars]
+# no secrets needed

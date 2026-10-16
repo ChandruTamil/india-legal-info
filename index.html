@@ -59,7 +59,11 @@
   Official texts: <a href="https://indiacode.ecourtsindia.com" target="_blank" rel="noreferrer">indiacode.ecourtsindia.com</a>.
 </footer>
 <script>
-const API = 'https://indiacode.ecourtsindia.com/api/search';
+// IndiaCode has no CORS headers, so the browser blocks direct calls.
+// This proxy (Cloudflare Workers) forwards the request server-side.
+// Deploy: paste this file into a Worker at workers.dev and it serves both
+// the page and /api/search?q=...
+const API = '/api/search';
 const form = document.getElementById('form);
 const input = document.getElementById('q);
 const btn = document.getElementById('btn);
@@ -105,13 +109,12 @@ form.addEventListener('submit', async (e) => {
       items.slice(0, 30).forEach(a => results.appendChild(card(a)));
     }
   } catch (ex) {
-    showErr('Could not reach IndiaCode (' + ex.message + '). The API may be temporarily down or blocked by CORS — try again shortly.');
+    showErr('Could not reach IndiaCode (' + ex.message + '). The API may be temporarily down — try again shortly.');
   } finally {
     btn.disabled = false; btn.textContent = 'Search';
   }
 });
 
-// Demo seed so the page isn't empty before first search
 results.innerHTML = '<div class="empty">Type a topic above to search central acts.</div>';
 </script>
 </body>
